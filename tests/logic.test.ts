@@ -483,7 +483,7 @@ test('every built-in skin names itself once and fills every slot with a colour, 
   const hex = /^#[0-9a-f]{6}$/
   const slots = Object.keys(tokyoNight.palette)
 
-  expect(SKINS.length).toBe(15)
+  expect(SKINS.length).toBe(16)
   expect(new Set(SKINS.map(skin => skin.name)).size).toBe(SKINS.length)
 
   for (const skin of SKINS) {

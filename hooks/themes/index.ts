@@ -4,6 +4,7 @@ import dracula from './dracula'
 import everforest from './everforest'
 import github from './github'
 import gruvbox from './gruvbox'
+import homebrew from './homebrew'
 import kanagawa from './kanagawa'
 import mono from './mono'
 import nightOwl from './night-owl'
@@ -31,5 +32,6 @@ export const SKINS: readonly Skin[] = [
   kanagawa,
   ayu,
   nightOwl,
+  homebrew,
   mono,
 ]
