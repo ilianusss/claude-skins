@@ -1,7 +1,7 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement, RenderSurface, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, RenderSurface, Timer, TurnUsage } from 'claude-code'
 
-import type { CustomSkin, Disclosure, Prefs, SkinSlot, SkinsMarkdownArgs, Touch, TurnStats, UsageSnap } from '../types'
+import type { CacheSnap, CustomSkin, Disclosure, Prefs, SkinSlot, SkinsMarkdownArgs, Touch, TurnStats, UsageSnap, Warmth } from '../types'
 import { DEFAULT_PREFS, listing, nextTables, parsePrefs, runSkinCommand, TOGGLES, withCalm } from './command'
 import { buildCustom, resolveSkin, skinNames, withSlot } from './custom'
 import { forTheme, gnomeDark, macDark, resolveLight, windowsDark } from './light'
@@ -14,7 +14,7 @@ import { disclosedRow, openedRows } from './detail-rows'
 import { copyOf } from './markdown'
 import { CHART_HINT } from './mermaid'
 import { commandSegments } from './command-output'
-import { askBand, desktopSpinnerRow, diffCard, footerRow, terminalCard, usageBand, groupRow, promptRow, quietResult, replyRows, spinnerRow, toolRow } from './rows'
+import { askBand, compactRow, desktopSpinnerRow, diffCard, footerRow, markGutter, terminalCard, usageBand, groupRow, promptRow, quietResult, replyRows, spinnerRow, toolRow } from './rows'
 import type { Look, SvgElement, Ui } from './rows'
 import { galleryPane } from './gallery'
 import { keepsOwnRow, SHELLS, shellResultOf } from './shell'
@@ -25,7 +25,8 @@ import { ICONS } from './skin'
 import type { Skin } from './skin'
 import { hunksOf } from './svg-diff'
 import { shellOutputOf } from './svg-terminal'
-import { countdownsOf, limitLabel, metersOf } from './svg-usage'
+import { cacheTtlOf, countdownsOf, lastRequestIn, limitLabel, metersOf, warmthOf } from './svg-usage'
+import type { Meter } from './svg-usage'
 import { shortenPath } from './format'
 import { kindOf, summarize, toolLabel } from './tools'
 import { commandOf, errorLine, isQuiet, quietLabel } from './quiet'
@@ -49,6 +50,8 @@ const PROMPT_NEXT: Readonly<Record<Prefs['prompt'], Prefs['prompt']>> = { left: 
 const CLIP_HEAD = 8
 const CLIP_TAIL = 4
 const FRAME_MS = 90
+// What the terminal's hint row under the prompt leaves of its width: two columns in front, three after.
+const HINT_INSET = 5
 // Countdowns read to the minute, so they are looked at once a minute.
 const COUNTDOWN_MS = 60_000
 const SETTLE_LEAD_MS = FRAME_MS
@@ -76,6 +79,10 @@ const commandAtom = atom({ plugin: 'skins', key: 'command' } as const, '')
 const usageAtom = atom({ plugin: 'skins', key: 'usage' } as const, { context: null, limits: [] } as UsageSnap)
 // The band's countdowns as last drawn; it changes only when one of them reads differently.
 const countdownsAtom = atom({ plugin: 'skins', key: 'countdowns' } as const, {} as Record<string, string>)
+// The main loop's last request, which the band does not read, and the cache's meter as last
+// drawn, which it does: it changes only when the meter reads differently.
+const cacheAtom = atom({ plugin: 'skins', key: 'cache' } as const, null as CacheSnap | null)
+const warmthAtom = atom({ plugin: 'skins', key: 'warmth' } as const, null as Warmth | null)
 const compactingAtom = atom({ plugin: 'skins', key: 'compacting' } as const, false)
 const pinnedAtom = atom({ plugin: 'skins', key: 'pinned' } as const, false)
 const settleAtom = atom({ plugin: 'skins', key: 'settle' } as const, 0)
@@ -504,6 +511,7 @@ async function refreshUsage($: EngineInterface): Promise<void> {
   const usage = await $.session.usage()
   const snap: UsageSnap = {
     context: usage.context.percent ?? null,
+    ...(usage.context.tokens === undefined ? {} : { tokens: { used: usage.context.tokens, window: usage.context.window } }),
     limits: usage.rateLimits.map(limit => {
       const resetsAt = limit.resetsAt === undefined ? NaN : Date.parse(limit.resetsAt)
 
@@ -538,6 +546,94 @@ async function tickCountdowns($: EngineInterface): Promise<void> {
 
   await settleEntrances($, true)
   await update($, countdownsAtom, () => next)
+}
+
+// Fires as the cache goes cold, so the meter says so on time rather than at the next minute's tick.
+let coldTimer: Timer | undefined
+
+// A main-loop request that used the prompt cache keeps it warm from when it was sent; one
+// that neither read nor wrote it means caching is off, and the meter goes.
+async function noteRequest($: EngineInterface, sentAt: number, usage: TurnUsage): Promise<void> {
+  const hasRead = usage.cache_read_input_tokens > 0
+  const before = await read($, cacheAtom)
+  const cache = hasRead || usage.cache_creation_input_tokens > 0 ? { sentAt, ttlMs: cacheTtlOf(before, sentAt, hasRead, await limitsNow($)) } : null
+
+  await holdCache($, cache)
+}
+
+const limitsNow = async ($: EngineInterface): Promise<{ percent: number }[]> =>
+  (await $.session.usage()).rateLimits.map(limit => ({ percent: limit.percentUsed }))
+
+// A resumed or branched conversation's cache is as warm as its last request left it, which
+// its transcript says: nothing this process sent. A transcript too long to read (over 4 MiB)
+// leaves the meter to the next request: its file time is no guide, as resuming touches it.
+async function seedCache($: EngineInterface, transcript: string): Promise<void> {
+  const found = lastRequestIn(await $.fs.read(transcript))
+
+  if (found === undefined) {
+    return
+  }
+
+  await holdCache($, { sentAt: found.sentAt, ttlMs: found.ttlMs ?? cacheTtlOf(null, found.sentAt, false, await limitsNow($)) })
+}
+
+// Keeps the cache's last request, redraws its meter, and sets the timer for when it goes cold.
+async function holdCache($: EngineInterface, cache: CacheSnap | null): Promise<void> {
+  await update($, cacheAtom, () => cache)
+  await tickWarmth($)
+
+  coldTimer?.cancel()
+  coldTimer =
+    cache === null
+      ? undefined
+      : $.clock.after(Math.max(1, cache.sentAt + cache.ttlMs - (await $.clock.now()) + 1), () => {
+          void tickWarmth($).catch((error: unknown) => {
+            $.ui.log(`cache tick: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+          })
+        })
+}
+
+// Redraws the cache's meter when it would read differently, as the countdowns do.
+async function tickWarmth($: EngineInterface): Promise<void> {
+  const next = warmthOf(await read($, cacheAtom), await $.clock.now())
+
+  if (JSON.stringify(next) === JSON.stringify(await read($, warmthAtom))) {
+    return
+  }
+
+  await settleEntrances($, true)
+  await update($, warmthAtom, () => next)
+}
+
+// The usage band's meters as they read now. Drawn from the clock so a countdown switched on
+// shows at once; reading the atoms redraws the band when the minute tick changes one.
+async function metersNow($: EngineInterface, active: Active | null): Promise<Meter[]> {
+  const usage = await read($, usageAtom)
+  const countdowns = active?.prefs.countdown === true ? (await read($, countdownsAtom), countdownsOf(usage, await $.clock.now())) : {}
+
+  return metersOf(usage, countdowns, await read($, warmthAtom))
+}
+
+// The band's Compact button: whether it shows, and what a press does.
+// Compacting mid-turn would cut the turn's own context out from under it.
+// Runs Claude Code's own /compact, so the person sees its usual progress and result.
+// Work a press starts is abandoned when the press ends, which cancels a compaction
+// still running, so a timer starts it in a dispatch of its own, which returns the run
+// so that dispatch lasts until the compaction ends. The button hides until then, so
+// repeated presses do not queue one /compact each.
+async function compactControl($: EngineInterface, active: Active, isWorking: boolean): Promise<{ canCompact: boolean; compact: () => void }> {
+  const isCompacting = await read($, compactingAtom)
+  const compact = () => {
+    void update($, compactingAtom, () => true)
+    $.clock.after(1, () =>
+      $.command
+        .run({ command: 'compact' })
+        .catch((error: unknown) => $.ui.toast(`Compacting failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => update($, compactingAtom, () => false)),
+    )
+  }
+
+  return { canCompact: active.prefs.compact && !isWorking && !isCompacting, compact }
 }
 
 async function askForStar($: EngineInterface): Promise<void> {
@@ -603,6 +699,8 @@ export const register: Register = on => {
   let isWorking = false
   let ticker: Timer | undefined
   let countdownTicker: Timer | undefined
+  // The columns the band keeps clear for the engine's collapse mark, by the engine's version.
+  let gutter = 0
   // The width the last reply was drawn at, shown by /skin list to tune table sizing.
   let lastColumns: number | undefined
 
@@ -630,6 +728,13 @@ export const register: Register = on => {
       })
     })
     loadedFor = await sessionId($)
+    gutter = await $.session
+      .version()
+      .then(version => markGutter(version.base ?? version.version))
+      .catch((error: unknown) => {
+        $.ui.log(`engine version: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+        return 0
+      })
     await load($)
     await refreshUsage($)
     await followTheme($)
@@ -653,6 +758,9 @@ export const register: Register = on => {
       void tickCountdowns($).catch((error: unknown) => {
         $.ui.log(`countdown tick: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
       })
+      void tickWarmth($).catch((error: unknown) => {
+        $.ui.log(`cache tick: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      })
     })
 
     return next(e)
@@ -661,6 +769,12 @@ export const register: Register = on => {
   // Where the guard does not hold it back, this comes first; session.append then finds the session loaded.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     await reloadIfNewSession($, typeof e.session_id === 'string' && e.session_id !== '' ? e.session_id : undefined)
+
+    if (e.source !== 'clear' && typeof e.transcript_path === 'string' && e.transcript_path !== '') {
+      await seedCache($, e.transcript_path).catch((error: unknown) => {
+        $.ui.log(`cache from transcript: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      })
+    }
 
     return next(e)
   })
@@ -720,6 +834,22 @@ export const register: Register = on => {
     await refreshUsage($)
 
     return next(e)
+  })
+
+  // The main loop's requests keep the prompt cache warm, timed from when each was sent.
+  // A subagent's run its own conversation, and its own cache.
+  on('turn.step', async function* ($, e, next) {
+    const sentAt = await $.clock.now()
+    const response = yield* next(e)
+
+    // A failure here costs the meter, never the turn.
+    if (e.agentId === undefined && response.usage !== null) {
+      await noteRequest($, sentAt, response.usage).catch((error: unknown) => {
+        $.ui.log(`cache: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      })
+    }
+
+    return response
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -1216,15 +1346,12 @@ export const register: Register = on => {
     return footerRow(lookOf($.ui.resolve(e), active, e.surface), word, e.props.durationMs, turns[String(e.props.durationMs)])
   })
 
-  // The band above the prompt: context and plan limits. Another mod's drawing there,
-  // and a survey, keep their place.
+  // The usage band: on the desktop above the prompt; on the terminal it is the footer under
+  // the prompt (PromptHint below), and only the Compact nudge stays here, where its digit
+  // hotkey works. Another mod's drawing here, and a survey, keep their place.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const active = await activeSkin($)
-    const usage = await read($, usageAtom)
-    // Drawn from the clock so a countdown switched on shows at once; reading the atom
-    // redraws the band when the minute tick changes one.
-    const countdowns = active?.prefs.countdown === true ? (await read($, countdownsAtom), countdownsOf(usage, await $.clock.now())) : {}
-    const meters = metersOf(usage, countdowns)
+    const meters = await metersNow($, active)
 
     if (active === null || !active.prefs.band || e.props.hasSurvey || meters.length === 0) {
       return next(e)
@@ -1232,32 +1359,57 @@ export const register: Register = on => {
 
     const plain = lookOf($.ui.resolve(e), active, e.surface)
     const { Box } = plain.ui
-    const theirs = await next(e)
-    // Compacting mid-turn would cut the turn's own context out from under it.
-    // Runs Claude Code's own /compact, so the person sees its usual progress and result.
-    // Work a press starts is abandoned when the press ends, which cancels a compaction
-    // still running, so a timer starts it in a dispatch of its own, which returns the run
-    // so that dispatch lasts until the compaction ends. The button hides until then, so
-    // repeated presses do not queue one /compact each.
-    const isCompacting = await read($, compactingAtom)
-    const compact = () => {
-      void update($, compactingAtom, () => true)
-      $.clock.after(1, () =>
-        $.command
-          .run({ command: 'compact' })
-          .catch((error: unknown) => $.ui.toast(`Compacting failed: ${error instanceof Error ? error.message : String(error)}`))
-          .finally(() => update($, compactingAtom, () => false)),
+    const { canCompact, compact } = await compactControl($, active, e.props.isWorking)
+
+    if (e.surface === 'terminal') {
+      const nudge = canCompact ? compactRow(plain, meters, compact, gutter) : undefined
+
+      if (nudge === undefined) {
+        return next(e)
+      }
+
+      const theirs = await next(e)
+
+      return (
+        <Box flexDirection="column">
+          {nudge}
+          {theirs}
+        </Box>
       )
     }
+
+    const theirs = await next(e)
     const look = { ...plain, ...(plain.svg === undefined ? {} : { isFirstDraw: await firstDraws($, e, active.prefs) }) }
 
     return withSettle(
       $,
       e,
       <Box flexDirection="column">
-        {usageBand(look, meters, active.prefs.compact && !e.props.isWorking && !isCompacting, compact)}
+        {usageBand(look, meters, canCompact, compact, { gutter })}
         {theirs}
       </Box>,
+    )
+  })
+
+  // The terminal's footer: Claude Code's own hint line under the prompt (its shortcuts and mode
+  // pills), then the usage band, as wide as the row, its sections packed into lines.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const active = await activeSkin($)
+    const meters = e.surface === 'terminal' ? await metersNow($, active) : []
+
+    if (active === null || !active.prefs.band || meters.length === 0) {
+      return next(e)
+    }
+
+    const look = lookOf($.ui.resolve(e), active, e.surface)
+    const { Box } = look.ui
+    const theirs = await next(e)
+
+    return (
+      <Box flexDirection="column">
+        {theirs}
+        {usageBand(look, meters, false, () => undefined, e.viewport === undefined ? {} : { width: e.viewport.columns - HINT_INSET })}
+      </Box>
     )
   })
 

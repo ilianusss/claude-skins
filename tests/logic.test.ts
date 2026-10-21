@@ -4,14 +4,14 @@ import { DEFAULT_PREFS, offered, parsePrefs, runSkinCommand, TOGGLES, withCalm }
 import { foldLines, shellResultOf, shellStatus } from '../hooks/shell'
 import { buildCustom, resolveSkin, skinNames, withSlot } from '../hooks/custom'
 import { runDesign } from '../hooks/designer'
-import { clipLines, diffstat, formatDuration, formatMs, pick, shortenPath } from '../hooks/format'
+import { clipLines, diffstat, formatDuration, formatMs, formatTokens, pick, shortenPath } from '../hooks/format'
 import { columnWidths, copyOf, cutCell, padCell, splitReply, widthOf, wrapLines } from '../hooks/markdown'
 import { codeSvg, tokenize } from '../hooks/svg-code'
 import { CONTROL_SLOT, fitText, measure as measureAt, settled } from '../hooks/svg-kit'
 import { diffLines, diffSvg, hunksOf } from '../hooks/svg-diff'
 import { fitColumns, kindOfCell, measure, tableSvg, wrapCell } from '../hooks/svg-table'
 import { outputLines, shellOutputOf, terminalSvg } from '../hooks/svg-terminal'
-import { countdownOf, countdownsOf, limitLabel, meterColor, metersKey, metersOf, usageSvg } from '../hooks/svg-usage'
+import { cacheTtlOf, colorOf, countdownOf, countdownsOf, lastRequestIn, limitLabel, meterColor, metersKey, metersOf, trackColor, usageLine, usageSvg, warmthOf } from '../hooks/svg-usage'
 import { starStep } from '../hooks/star'
 import { deepen, gnomeDark, isLightTheme, macDark, resolveLight, toLight, windowsDark } from '../hooks/light'
 import { parseFolders, prefsFor, withFolder, withoutFolder } from '../hooks/folders'
@@ -26,6 +26,7 @@ import { chartSvg } from '../hooks/svg-chart'
 import { mathSvg } from '../hooks/svg-math'
 import { chartArt } from '../hooks/chart-art'
 import { blockBar, dotRule } from '../hooks/chart-rows'
+import { markGutter, packLines } from '../hooks/rows'
 import { seriesColor } from '../hooks/svg-chart-kit'
 import rosePine from '../hooks/themes/rose-pine'
 
@@ -353,12 +354,12 @@ test('code is split into comments, strings, numbers and keywords by language', a
   expect(codeSvg('a\nb', 'ts', tokyoNight.palette, 600).source).toContain('TS')
 })
 
-test('plan limits read as 5h and 7d, and a meter warns as it fills', async () => {
-  expect(limitLabel('five_hour')).toBe('5h')
-  expect(limitLabel('seven_day')).toBe('7d')
-  expect(metersOf({ context: 42.4, limits: [{ label: '5h', percent: 120 }] })).toEqual([
+test('plan limits read as Session and Week, and a meter warns as it fills', async () => {
+  expect(limitLabel('five_hour')).toBe('Session')
+  expect(limitLabel('seven_day')).toBe('Week')
+  expect(metersOf({ context: 42.4, limits: [{ label: 'Session', percent: 120 }] })).toEqual([
     { label: 'context', percent: 42 },
-    { label: '5h', percent: 100 },
+    { label: 'Session', percent: 100 },
   ])
   expect(meterColor(85, tokyoNight.palette)).toBe(tokyoNight.palette.warn)
   expect(usageSvg([{ label: 'context', percent: 42 }], tokyoNight.palette).alt).toBe('context 42%')
@@ -367,13 +368,120 @@ test('plan limits read as 5h and 7d, and a meter warns as it fills', async () =>
 test('a countdown reads to the minute, rounding up, and only for the limits that reset', async () => {
   const minutes = (n: number) => n * 60_000
 
-  expect(countdownOf(minutes(3 * 1440 + 4 * 60 + 30))).toBe('3d4h')
-  expect(countdownOf(minutes(65))).toBe('1h05')
+  expect(countdownOf(minutes(3 * 1440 + 4 * 60 + 30))).toBe('3d04h30m')
+  expect(countdownOf(minutes(2 * 1440 + 7))).toBe('2d00h07m')
+  expect(countdownOf(minutes(65))).toBe('1h05m')
   expect(countdownOf(minutes(11) + 1)).toBe('12m')
   expect(countdownOf(0)).toBe('now')
   expect(countdownOf(-5000)).toBe('now')
-  expect(countdownsOf({ context: 10, limits: [{ label: '5h', percent: 1, resetsAt: minutes(100) }, { label: '7d', percent: 2 }] }, 0)).toEqual({ '5h': '1h40' })
-  expect(metersKey(metersOf({ context: null, limits: [{ label: '5h', percent: 1 }] }, { '5h': '1h40' }))).toBe(metersKey(metersOf({ context: null, limits: [{ label: '5h', percent: 1 }] })))
+  expect(countdownsOf({ context: 10, limits: [{ label: 'Session', percent: 1, resetsAt: minutes(100) }, { label: 'Week', percent: 2 }] }, 0)).toEqual({ Session: '1h40m' })
+  expect(metersKey(metersOf({ context: null, limits: [{ label: 'Session', percent: 1 }] }, { Session: '1h40m' }))).toBe(metersKey(metersOf({ context: null, limits: [{ label: 'Session', percent: 1 }] })))
+})
+
+test('the session says when it resets in words, the week by its countdown alone, each in brackets', async () => {
+  const limits = [
+    { label: 'Session', percent: 20 },
+    { label: 'Week', percent: 61 },
+  ]
+  const meters = metersOf({ context: null, limits }, { Session: '4h12m', Week: '3d04h12m' })
+
+  expect(usageLine(meters, tokyoNight.palette).map(meter => meter.text)).toEqual(['20% Session (reset in 4h12m)', '61% Week (3d04h12m)'])
+  expect(usageLine(metersOf({ context: null, limits }), tokyoNight.palette).map(meter => meter.text), 'countdown off').toEqual(['20% Session', '61% Week'])
+  expect(usageSvg(meters, tokyoNight.palette).alt).toBe('Session 20%, resets in 4h12m, Week 61%, resets in 3d04h12m')
+})
+
+test('the cache leads the band, as words with no ring or bar, coloured by how warm it is', async () => {
+  const meters = metersOf({ context: 42, limits: [{ label: 'Session', percent: 20 }] }, {}, { percent: 50, left: '30m' })
+
+  expect(meters.map(meter => meter.label)).toEqual(['cache', 'context', 'Session'])
+  expect(usageLine(meters, tokyoNight.palette).map(meter => [meter.bar, meter.color, meter.text])).toEqual([
+    ['', tokyoNight.palette.user, 'warm cache · 30m'],
+    ['███▍    ', tokyoNight.palette.user, '42% context'],
+    ['█▋      ', tokyoNight.palette.user, '20% Session'],
+  ])
+  const svg = usageSvg(meters.slice(0, 1), tokyoNight.palette).source
+  expect(svg).not.toContain('<circle')
+  expect(svg).toContain('warm</tspan>')
+})
+
+test('the empty part of a bar lies on a track lifted from the skin’s band colour toward its muted text', async () => {
+  expect(trackColor({ ...tokyoNight.palette, surface: '#32302f', muted: '#928374' })).toBe('#4f4944')
+  expect(trackColor({ ...tokyoNight.palette, surface: 'black', muted: '#928374' }), 'not a hex colour: as given').toBe('black')
+})
+
+test('sections pack into lines as full as they go, in order, a separator’s five columns between two', async () => {
+  expect(packLines([18, 29, 21, 18], 101)).toEqual([[0, 1, 2, 3]])
+  expect(packLines([18, 29, 21, 18], 100)).toEqual([[0, 1, 2], [3]])
+  expect(packLines([18, 29, 21, 18], 40)).toEqual([[0], [1], [2], [3]])
+  expect(packLines([120, 5], 40), 'one too wide still gets its line').toEqual([[0], [1]])
+  expect(packLines([], 40)).toEqual([])
+})
+
+test('a transcript says when its main loop last asked the model, and for how long that request kept the cache', async () => {
+  const line = (row: object) => JSON.stringify(row)
+  const at = (seconds: number) => new Date(seconds * 1000).toISOString()
+  const request = (seconds: number, extra: object = {}) => line({ type: 'api-request', timestamp: at(seconds), querySource: 'repl_main_thread', ...extra })
+
+  expect(lastRequestIn([request(10, { cacheControl: [{ value: { ttl: '1h' } }] }), line({ type: 'assistant', timestamp: at(12) })].join('\n'))).toEqual({
+    sentAt: 10_000,
+    ttlMs: 3_600_000,
+  })
+  expect(lastRequestIn(request(10, { cacheControl: [{ value: { type: 'ephemeral' } }] })), 'marked with no ttl: five minutes').toEqual({ sentAt: 10_000, ttlMs: 300_000 })
+  expect(lastRequestIn([request(10), request(20, { querySource: 'agent:explore' })].join('\n')), 'a subagent’s request is its own').toEqual({ sentAt: 10_000 })
+  expect(
+    lastRequestIn([line({ type: 'assistant', timestamp: at(5) }), line({ type: 'assistant', timestamp: at(9), isSidechain: true }), 'not json'].join('\n')),
+    'an older transcript: its last main assistant message',
+  ).toEqual({ sentAt: 5000 })
+  expect(lastRequestIn(line({ type: 'user', timestamp: at(1) }))).toBeUndefined()
+})
+
+test('a terminal bar fills smooth to the eighth of a cell and leaves the rest blank, always eight cells', async () => {
+  const bars = [0, 1, 42, 50, 99, 100].map(percent => usageLine([{ label: 'context', percent }], tokyoNight.palette)[0]!.bar)
+
+  expect(bars).toEqual(['        ', '▏       ', '███▍    ', '████    ', '███████▉', '████████'])
+})
+
+test('the context meter carries its tokens at a glance', async () => {
+  expect([950, 8_449, 9_960, 84_210, 200_000, 999_499, 999_500, 1_000_000, 1_260_000].map(formatTokens)).toEqual([
+    '950', '8.4k', '10k', '84k', '200k', '999k', '1M', '1M', '1.3M',
+  ])
+  expect(metersOf({ context: 42, tokens: { used: 84_210, window: 200_000 }, limits: [] })).toEqual([{ label: 'context', percent: 42, tokens: '84k/200k' }])
+  expect(usageSvg(metersOf({ context: 42, tokens: { used: 84_210, window: 1_000_000 }, limits: [] }), tokyoNight.palette).alt).toBe('context 42%, 84k/1M tokens')
+})
+
+test('the band keeps a gutter for the collapse mark on engines before 2.1.289 only', async () => {
+  expect(['2.1.287', '2.1.288', '2.1.289', '2.1.304', '2.1.290-dev', '3.0.0', '1.9.999', 'local'].map(markGutter)).toEqual([5, 5, 0, 0, 0, 0, 5, 0])
+  expect(markGutter(undefined)).toBe(0)
+})
+
+test('the cache lives an hour on a plan, five minutes off one or in overage, and a request after a gap says which', async () => {
+  const minutes = (n: number) => n * 60_000
+  const plan = [{ percent: 18 }]
+
+  expect(cacheTtlOf(null, 0, false, plan)).toBe(minutes(60))
+  expect(cacheTtlOf(null, 0, false, [])).toBe(minutes(5))
+  expect(cacheTtlOf({ sentAt: 0, ttlMs: minutes(60) }, minutes(1), true, [{ percent: 100 }]), 'overage').toBe(minutes(5))
+  expect(cacheTtlOf({ sentAt: 0, ttlMs: minutes(5) }, minutes(12), true, []), 'read after twelve minutes away').toBe(minutes(60))
+  expect(cacheTtlOf({ sentAt: 0, ttlMs: minutes(60) }, minutes(12), false, plan), 'missed after twelve minutes away').toBe(minutes(5))
+  expect(cacheTtlOf({ sentAt: 0, ttlMs: minutes(60) }, minutes(2), false, []), 'too soon to say: the last answer holds').toBe(minutes(60))
+})
+
+test('the cache meter drains by the minute, warns in its last fifth and greys once cold, keyed by warm or cold alone', async () => {
+  const minutes = (n: number) => n * 60_000
+  const cache = { sentAt: 0, ttlMs: minutes(60) }
+  const at = (n: number) => metersOf({ context: null, limits: [] }, {}, warmthOf(cache, minutes(n)))
+
+  expect(warmthOf(null, 0)).toBeNull()
+  expect(warmthOf(cache, 1)).toEqual({ percent: 100, left: '1h00m' })
+  expect(warmthOf(cache, minutes(30) + 1)).toEqual({ percent: 50, left: '30m' })
+  expect(warmthOf(cache, minutes(60))).toEqual({ percent: 0 })
+  expect(at(10)).toEqual([{ label: 'cache', percent: 83, warm: true, resets: '50m' }])
+  expect(colorOf(at(10)[0]!, tokyoNight.palette)).toBe(tokyoNight.palette.user)
+  expect(colorOf(at(50)[0]!, tokyoNight.palette)).toBe(tokyoNight.palette.warn)
+  expect(colorOf(at(60)[0]!, tokyoNight.palette)).toBe(tokyoNight.palette.muted)
+  expect(metersKey(at(10)), 'draining keeps the ring still').toBe(metersKey(at(50)))
+  expect(metersKey(at(60)), 'going cold draws it afresh').not.toBe(metersKey(at(50)))
+  expect(usageSvg(at(10), tokyoNight.palette).alt).toBe('cache warm, cold in 50m')
 })
 
 test('a long cell wraps on its words, breaks a word too long for the column, and caps its lines', async () => {

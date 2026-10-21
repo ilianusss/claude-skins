@@ -90,9 +90,9 @@ Built-in skins: `noir`, `tokyo-night`, `dracula`, `catppuccin`, `rose-pine`, `no
 |---|---|
 | `rail` | The coloured rail beside tool rows |
 | `shimmer` | The band of light across the spinner word |
-| `band` | The usage meters above the prompt |
-| `countdown` | Time left on each limit in the band |
-| `compact` | The Compact button in the band, with a nudge from 70% context (on by default) |
+| `band` | The usage meters: how warm the prompt cache is, context with its tokens, plan limits. Above the prompt on the desktop, the footer under it in the terminal |
+| `countdown` | Time left on each limit in the band: `Session (reset in 4h12m)`, `Week (3d04h12m)` |
+| `compact` | The Compact button in the band, with a nudge from 70% context (on by default). In the terminal they show above the prompt from 70%, where the `0` key presses it |
 | `clip` | Trim Claude Code's own shell output to its head and tail |
 | `markdown` | Alerts and task lists drawn |
 | `quiet` | Reads, searches and read-only commands folded to one row |
@@ -137,7 +137,7 @@ Drawn by the mod's own card code (`scripts/previews.ts`), not screenshots.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/previews/usage-light.svg">
-  <img alt="Context and plan limit rings" src="docs/previews/usage-dark.svg">
+  <img alt="Context, prompt cache and plan limit rings" src="docs/previews/usage-dark.svg">
 </picture>
 
 ## What it redraws
@@ -155,7 +155,7 @@ Drawn by the mod's own card code (`scripts/previews.ts`), not screenshots.
 | Alerts and task lists | `> [!NOTE]` as a titled box, `- [ ]` with ticks and a done count | The same |
 | Code blocks | Card with language, line numbers, highlighting; shell blocks keep the Run button | Framed, the language on the frame, highlighted in the skin's colours: TS/JS, JSON, shells, PowerShell, Python, Rust, Go, C/C++, C#, F#, Java, YAML, TOML, HTML/XML, CSS, SQL, diff, Markdown, Lua (`/skin highlight off` for Claude Code's own) |
 | Spinner | Animated icon per phase | The skin's word with a band of light |
-| Above the prompt | Context and plan-limit rings, Compact button, nudge at 70% | Block meters, same button |
+| Usage band | Above the prompt, a round-cornered bar, everything centred, a `│` between sections: the cache as words until it goes cold (`warm cache · 52m`, `cold cache`, a resumed session's read from its transcript), a context ring with its tokens (`42% context · 84k/200k`), Session and Week limit rings, Compact button, nudge at 70% | The same bar as the footer under the prompt, sections packed into centred lines, smooth bar meters on a track; Compact and its nudge above the prompt from 70% |
 | Your prompts | Claude Code's own, so copy, rewind and selection stay | Rounded outline, or a plain marker |
 | Links and files | URLs are the app's own links; tool rows colour files this turn created (`ok`) or edited (`warn`) | URLs in prose are OSC 8 links where the terminal draws them (`FORCE_HYPERLINK=1` or `0` overrides the check), plain text elsewhere; paths with `:line`, numbers and versions coloured, this turn's files in `ok` or `warn` in rows and prose |
 | Diff fences | ` ```diff ` as the diff card, with Copy and `new only` (the code after the change) | Numbered old and new lines, the `+` and `-` in the skin's colours and the code highlighted in the language its `+++` path or a ` ```diff-fsharp ` tag names, the same two copies |
@@ -245,7 +245,7 @@ the README does not say.
 | Links | URLs as OSC 8 links; this turn's files coloured | Links and bare URLs clickable | **URLs and file paths clickable**; changed files coloured; link band | | | No |
 | Long blocks folded | Code, tables, shell output (`/skin fold`) | | Code, lists, tables | | | No |
 | Right-to-left text | No | **Hebrew and Arabic** | Hebrew and Arabic | | | No |
-| Usage meters | Context and plan limits above the prompt | | | | No | **Many widgets**, Powerline |
+| Usage meters | Context, prompt cache and plan limits above the prompt | | | | No | **Many widgets**, Powerline |
 | Spinner words | The skin's, with a shimmer | | | **Your own verbs and animations** | No | No |
 | Copy | Cards, tables as markdown or as drawn, `copy reply`, `/skin copy` | Buttons, `/prismantis copy`, HTML tables | Code, tables, diagrams, lists, quotes | | | No |
 | API for other mods | `$.skins.markdown` | `$.prismantis.markdown` | | | | No |
@@ -260,9 +260,8 @@ back to a code card. What skins plans next is in [ROADMAP.md](ROADMAP.md).
 ## Privacy
 
 skins draws and remembers, nothing else. It reads the session directory, your context and plan
-usage, the theme setting and `SKINS_THEME` / `COLORFGBG`, and keeps its settings in the mod store.
-It makes no network calls. On `auto`
-it asks the OS for light or dark mode (`defaults` on macOS, `gsettings` on GNOME). It compacts or
+usage, each response's prompt-cache token counts and, on resume, the session's transcript (when it last called the model; both for how warm the cache is), the theme setting and `SKINS_THEME` / `COLORFGBG`, and keeps its settings in the mod store.
+It makes no network calls. On `auto` it asks the OS for light or dark mode (`defaults` on macOS, `gsettings` on GNOME). It compacts or
 copies only when you press the button. Check it yourself with `claude plugin validate .`.
 
 ## Vendored code

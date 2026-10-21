@@ -1,4 +1,4 @@
-import type { On, RenderElement } from 'claude-code'
+import type { On, RenderElement, TurnUsage } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Plugin } from 'claude-code/testing'
 
@@ -1005,6 +1005,10 @@ const BAND = (surface: (typeof SURFACES)[number], isWorking: boolean) =>
     props: { hasSurvey: false, isWorking, maxRows: 4, bodyColumns: 100, scroll: { offset: 0, bodyRows: 4 }, view: {} },
   }) as const
 
+// The hint line under the prompt, where the terminal's band is the footer.
+const FOOTER = (isWorking = false) =>
+  ({ ...SITE, surface: 'terminal', component: 'PromptHint', requestId: 'hint', props: { isDraft: false, isWorking, hint: '? for shortcuts' } }) as const
+
 test('the band offers Compact, nudges at 70% context, and compacts on a press', async ($, on) => {
   let compacted = 0
   const toasts: string[] = []
@@ -1064,26 +1068,68 @@ const bandEngine = (on: On) => {
   }))
 }
 
-const spreadsEvenly = async (ui: { findAll: (q: { type: string }) => Promise<unknown> }) =>
-  ((await ui.findAll({ type: 'Box' })) as { props: { justifyContent?: string; flexGrow?: number } }[]).some(
-    el => el.props.justifyContent === 'space-evenly' && el.props.flexGrow === 1,
-  )
+// A round-cornered bar whose lines centre what they hold.
+async function centredInBar(ui: { findAll: (q: { type: string }) => Promise<unknown> }): Promise<boolean> {
+  const boxes = (await ui.findAll({ type: 'Box' })) as { props: { justifyContent?: string; borderStyle?: string } }[]
 
-test('the band draws each meter on its own, sized to its words, spread evenly beside Compact', async ($, on) => {
+  return boxes.some(el => el.props.borderStyle === 'round') && boxes.some(el => el.props.justifyContent === 'center')
+}
+
+test('the band is a round-cornered bar above the prompt on the desktop, the footer under it on the terminal, with Compact above', async ($, on) => {
   bandEngine(on)
   await startDesktop($, on)
 
   const band = await $.ui.mount(BAND('desktop', false))
   const meters = (await band.findAll({ type: 'Svg' })) as unknown as { props: { alt: string; width: number } }[]
-  expect(meters.map(el => el.props.alt)).toEqual([expect.stringContaining('context'), expect.stringContaining('5h'), expect.stringContaining('7d')])
+  expect(meters.map(el => el.props.alt)).toEqual([expect.stringContaining('context'), expect.stringContaining('Session'), expect.stringContaining('Week')])
   // Each as wide as its ring and words, not a fixed 132px slot, so the gaps between them are what spreads.
   for (const meter of meters) expect(meter.props.width).toBeLessThan(132)
-  expect(await spreadsEvenly(band)).toBe(true)
+  expect(await centredInBar(band)).toBe(true)
   expect(await band.find({ key: 'compact' })).toBeDefined()
   await band.unmount()
 
-  const line = await $.ui.mount(BAND('terminal', false))
-  expect(await spreadsEvenly(line)).toBe(true)
+  const footer = await $.ui.mount(FOOTER())
+  expect(await centredInBar(footer), 'the terminal’s bar is under the prompt').toBe(true)
+  expect(await footer.find({ key: 'compact' }), 'whose row arms no digit hotkey').toBeUndefined()
+  expect(textOf(((await footer.drawn()) as { children?: readonly unknown[] }).children?.[0]), 'its own line stays, above the bar').toBe('stock row')
+
+  const above = await $.ui.mount(BAND('terminal', false))
+  expect(await centredInBar(above), 'no bar above the prompt').toBe(false)
+  expect(await above.find({ type: 'Text', text: 'Context is 85% full' }), 'the nudge stays above, where its hotkey works').toBeDefined()
+  expect(await above.find({ key: 'compact' })).toBeDefined()
+})
+
+test('below the nudge the terminal draws nothing above the prompt', async ($, on) => {
+  stubEngine(on)
+  await startDesktop($, on)
+
+  const above = await $.ui.mount(BAND('terminal', false))
+  expect(textOf(await above.drawn())).toBe('stock row')
+})
+
+test('the bar keeps the collapse mark’s five columns clear only where the engine lays it out over them', async ($, on) => {
+  let version = '2.1.288'
+  on('session.version', () => ({ value: { version, base: version } }))
+  bandEngine(on)
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: { command: 'skin' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__skins__design' } }))
+  on('config.list', () => ({ value: [] }))
+  // The version is read as the session starts.
+  const gutterOf = async () => {
+    await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+    const band = await $.ui.mount(BAND('desktop', false))
+    const bar = ((await band.findAll({ type: 'Box' })) as unknown as { props: { borderStyle?: string; marginRight?: number } }[]).find(
+      el => el.props.borderStyle === 'round',
+    )
+    await band.unmount()
+
+    return bar?.props.marginRight ?? 0
+  }
+
+  expect(await gutterOf(), '2.1.288 draws the mark inside the band').toBe(5)
+  version = '2.1.304'
+  expect(await gutterOf(), 'from 2.1.289 the engine keeps it outside').toBe(0)
 })
 
 test('/skin compact off leaves the band to the meters, compact on brings the button back', async ($, on) => {
@@ -1092,12 +1138,13 @@ test('/skin compact off leaves the band to the meters, compact on brings the but
 
   await runSkin($, 'compact off')
   for (const surface of SURFACES) {
-    const band = await $.ui.mount(BAND(surface, false))
+    const band = await $.ui.mount(surface === 'terminal' ? FOOTER() : BAND(surface, false))
     expect(await band.find({ key: 'compact' }), `${surface}: no button`).toBeUndefined()
     expect(await band.find({ type: 'Text', text: 'Context is 85% full' }), `${surface}: no nudge`).toBeUndefined()
-    expect(await spreadsEvenly(band), `${surface}: the meters still spread`).toBe(true)
+    expect(await centredInBar(band), `${surface}: the meters stay centred in the bar`).toBe(true)
     await band.unmount()
   }
+  expect(textOf(await (await $.ui.mount(BAND('terminal', false))).drawn()), 'nothing above the terminal’s prompt').toBe('stock row')
 
   await runSkin($, 'compact on')
   const band = await $.ui.mount(BAND('desktop', false))
@@ -1606,7 +1653,7 @@ test('the band holds its rings still while the numbers stay and fills them once 
   expect(isSettled(await svgSource(band)), 'and then stay still').toBe(true)
 })
 
-// The stub clock starts at 10 s; this 5h window resets 100 minutes after that.
+// The stub clock starts at 10 s; this session window resets 100 minutes after that.
 const resetting = { startedAt: 0, context: { window: 200000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 18, resetsAt: new Date(10_000 + 100 * 60_000).toISOString() }] }
 
 test('with countdown on, the band says when each limit resets, on both surfaces', async ($, on) => {
@@ -1615,16 +1662,160 @@ test('with countdown on, the band says when each limit resets, on both surfaces'
   await startDesktop($, on)
 
   const desktop = await $.ui.mount(BAND('desktop', false))
-  expect(await svgSource(desktop), 'off by default').not.toContain('1h40')
+  expect(await svgSource(desktop), 'off by default').not.toContain('1h40m')
   await desktop.unmount()
 
   await runSkin($, 'countdown on')
   const band = await $.ui.mount(BAND('desktop', false))
-  expect(await svgSource(band)).toContain('5h · 1h40')
-  expect(((await band.findAll({ type: 'Svg' })) as unknown as { props: { alt: string } }[]).map(el => el.props.alt).join(', ')).toContain('5h 18%, resets in 1h40')
+  expect(await svgSource(band)).toContain('Session (reset in 1h40m)')
+  expect(((await band.findAll({ type: 'Svg' })) as unknown as { props: { alt: string } }[]).map(el => el.props.alt).join(', ')).toContain('Session 18%, resets in 1h40m')
 
-  const line = await $.ui.mount(BAND('terminal', false))
-  expect(await line.find({ type: 'Text', text: ' 18% 5h · 1h40' })).toBeDefined()
+  const line = await $.ui.mount(FOOTER())
+  expect(await line.find({ type: 'Text', text: '  18% Session (reset in 1h40m)' })).toBeDefined()
+})
+
+test('the context meter shows the tokens behind its percent, on both surfaces', async ($, on) => {
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 42, tokens: 84_210 }, rateLimits: [] } }))
+  stubEngine(on, { usage: true })
+  await startDesktop($, on)
+
+  const band = await $.ui.mount(BAND('desktop', false))
+  expect(await svgSource(band)).toContain('context · 84k/200k')
+  expect(((await band.find({ type: 'Svg' })) as unknown as { props: { alt: string } }).props.alt).toBe('context 42%, 84k/200k tokens')
+
+  const line = await $.ui.mount(FOOTER())
+  expect(await line.find({ type: 'Text', text: '  42% context · 84k/200k' })).toBeDefined()
+})
+
+// What the engine's next response reports, set before each step a test sends.
+type Responses = { usage: TurnUsage | null }
+
+const cacheEngine = (on: On, limits: { kind: string; percentUsed: number }[]) => {
+  const responses: Responses = { usage: null }
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 42 }, rateLimits: limits } }))
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: responses.usage }
+  })
+
+  return { clock: stubEngine(on, { usage: true }), responses }
+}
+
+// One request of a turn, main loop or `agentId`'s, whose response read `read` tokens from
+// the prompt cache and wrote `written` to it.
+async function sendStep($: Engine, responses: Responses, read: number, written: number, agentId?: string) {
+  responses.usage = { input_tokens: 12, output_tokens: 40, cache_read_input_tokens: read, cache_creation_input_tokens: written, model: 'claude-opus-5-5' }
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3, ...(agentId === undefined ? {} : { agentId }) })
+
+  // The stub streams no chunks: only the response's usage matters here.
+  while (!(await stream.next()).done) {}
+}
+
+test('on a plan, the band shows the cache warm for an hour after a main-loop request, cooling, then cold', async ($, on) => {
+  const { clock, responses } = cacheEngine(on, [{ kind: 'five_hour', percentUsed: 18 }])
+  await startDesktop($, on)
+
+  const line = await $.ui.mount(FOOTER())
+  const words = async () => (await line.findAll({ type: 'Text' })).map(textOf).join(' ')
+  expect(await words(), 'no request yet, no cache meter').not.toContain('cache')
+
+  await sendStep($, responses, 0, 9000, 'a1')
+  expect(await words(), 'a subagent keeps a cache of its own').not.toContain('cache')
+
+  await sendStep($, responses, 9000, 400)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 1h00m' })).toBeDefined()
+
+  // In steps: the spinner's ticker fires every 90 ms, and one advance resolves at most 10,000 waits.
+  const wait = async (minutes: number) => {
+    for (let step = 0; step < minutes; step += 10) await clock.advance(Math.min(10, minutes - step) * 60_000)
+  }
+
+  await wait(50)
+  type Drawn = { props: { color?: string }; children?: readonly Drawn[] }
+  const cooling = ((await line.findAll({ type: 'Text' })) as unknown as Drawn[]).find(el => textOf(el) === 'warm cache · 10m')
+  expect(cooling, 'the minute tick counts it down').toBeDefined()
+  expect(cooling?.props.color, 'in its last fifth it warns').toBe(noir.palette.warn)
+
+  await wait(10)
+  expect(await line.find({ type: 'Text', text: 'cold cache' })).toBeDefined()
+
+  const band = await $.ui.mount(BAND('desktop', false))
+  expect(((await band.findAll({ type: 'Svg' })) as unknown as { props: { alt: string } }[]).map(el => el.props.alt)).toContain('cache cold')
+
+  await sendStep($, responses, 9000, 0)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 1h00m' }), 'the next request warms it again').toBeDefined()
+})
+
+test('off a plan the cache keeps five minutes and goes cold on time, a read after longer away proves the hour', async ($, on) => {
+  const { clock, responses } = cacheEngine(on, [])
+  await startDesktop($, on)
+  const line = await $.ui.mount(FOOTER())
+
+  // Half a minute off the minute ticks, so going cold on time is the timer's doing.
+  await clock.advance(30_000)
+  await sendStep($, responses, 0, 9000)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 5m' })).toBeDefined()
+
+  await clock.advance(5 * 60_000)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 1m' }), 'the last tick before it lapses').toBeDefined()
+  await clock.advance(1)
+  expect(await line.find({ type: 'Text', text: 'cold cache' }), 'cold the moment it lapses').toBeDefined()
+
+  await clock.advance(5 * 60_000)
+  await sendStep($, responses, 9000, 0)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 1h00m' }), 'still read from the cache ten minutes on: the hour').toBeDefined()
+
+  await sendStep($, responses, 0, 0)
+  expect((await line.findAll({ type: 'Text' })).map(textOf).join(' '), 'no cache use, caching is off').not.toContain('cache')
+})
+
+test('the footer puts a │ between its sections and packs them into lines, so none starts or ends on one', async ($, on) => {
+  const { responses } = cacheEngine(on, [
+    { kind: 'five_hour', percentUsed: 47 },
+    { kind: 'seven_day', percentUsed: 24 },
+  ])
+  await startDesktop($, on)
+  await sendStep($, responses, 9000, 0)
+
+  const footer = await $.ui.mount({ ...FOOTER(), viewport: { columns: 80, rows: 30 } })
+  const rows = ((await footer.findAll({ type: 'Box' })) as unknown as { props: { flexWrap?: string }; children?: readonly unknown[] }[]).filter(
+    el => el.props.flexWrap === 'wrap',
+  )
+  const lines = rows.map(row => (row.children ?? []).map(textOf))
+
+  expect(lines.length, 'four sections do not fit 75 columns in one line').toBe(2)
+  expect(lines.map(line => line.filter(part => part === '│').length)).toEqual(lines.map(line => (line.length - 1) / 2))
+  for (const line of lines) {
+    expect(line[0]).not.toBe('│')
+    expect(line.at(-1)).not.toBe('│')
+  }
+  expect(lines.flat().filter(part => part !== '│')[0], 'the cache comes first, as words').toBe('warm cache · 1h00m')
+})
+
+test('a resumed session takes its cache from its transcript: warm for what is left of the hour, cold once it is past', async ($, on) => {
+  const minutes = (n: number) => n * 60_000
+  // The main loop's last request, and the reply to it two seconds on.
+  const transcriptAt = (sentAt: number) =>
+    [
+      { type: 'api-request', querySource: 'repl_main_thread', timestamp: new Date(sentAt).toISOString(), cacheControl: [{ value: { type: 'ephemeral', ttl: '1h' } }] },
+      { type: 'assistant', timestamp: new Date(sentAt + 2000).toISOString() },
+    ]
+      .map(row => JSON.stringify(row))
+      .join('\n')
+  let transcript = transcriptAt(0)
+  on('fs.read', () => ({ value: transcript }))
+  on('classic.SessionStart', () => ({}) as never)
+  const { clock } = cacheEngine(on, [])
+  // Set before the session starts its tickers, so moving the clock resolves no waits.
+  await clock.set(minutes(30))
+  await startDesktop($, on)
+  const line = await $.ui.mount(FOOTER())
+
+  await $.classic.SessionStart({ source: 'resume', session_id: 's1', transcript_path: '/t/s1.jsonl' } as never)
+  expect(await line.find({ type: 'Text', text: 'warm cache · 30m' }), 'the hour its request named, off a plan too, half gone').toBeDefined()
+
+  transcript = transcriptAt(-minutes(120))
+  await $.classic.SessionStart({ source: 'resume', session_id: 's2', transcript_path: '/t/s2.jsonl' } as never)
+  expect(await line.find({ type: 'Text', text: 'cold cache' }), 'two hours on').toBeDefined()
 })
 
 test('a countdown ticking down redraws the band without filling its rings again', async ($, on) => {
@@ -1638,7 +1829,7 @@ test('a countdown ticking down redraws the band without filling its rings again'
 
   await clock.advance(60_000)
   const ticked = await svgSource(band)
-  expect(ticked).toContain('5h · 1h39')
+  expect(ticked).toContain('Session (reset in 1h39m)')
   expect(isSettled(ticked), 'the new minute keeps the rings still').toBe(true)
 })
 

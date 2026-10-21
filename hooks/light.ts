@@ -18,6 +18,17 @@ const toHex = (rgb: readonly number[]): string =>
 export const deepen = (hex: string, amount: number): string =>
   toHex(channels(hex).map(value => value * (1 - amount)))
 
+// `amount` of the way from `from` to `to`; `from` as given where either is not `#rrggbb`.
+export function mix(from: string, to: string, amount: number): string {
+  if (![from, to].every(hex => /^#[0-9a-f]{6}$/i.test(hex))) {
+    return from
+  }
+
+  const target = channels(to)
+
+  return toHex(channels(from).map((value, i) => value + ((target[i] ?? value) - value) * amount))
+}
+
 export function toLight(palette: Palette): Palette {
   const deep = (hex: string) => deepen(hex, 0.45)
 

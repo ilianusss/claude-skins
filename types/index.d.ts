@@ -82,7 +82,20 @@ export type CustomSkin = {
 
 // How full the context window is and how much of each plan limit is spent, in percent,
 // as the band above the prompt shows them, and when each limit resets (epoch ms) where known.
-export type UsageSnap = { context: number | null; limits: { label: string; percent: number; resetsAt?: number }[] }
+// `tokens` is what the context holds and what it can, where the engine counts them.
+export type UsageSnap = {
+  context: number | null
+  tokens?: { used: number; window: number }
+  limits: { label: string; percent: number; resetsAt?: number }[]
+}
+
+// When the main loop last sent the model its conversation, which keeps the prompt cache
+// warm, and how long the cache holds it from then (epoch ms, ms).
+export type CacheSnap = { sentAt: number; ttlMs: number }
+
+// The prompt cache as the band draws it: how much of its life is left, in percent, and the
+// time left as `countdownOf` writes it, absent once it has gone cold.
+export type Warmth = { percent: number; left?: string }
 
 // What one turn did, shown in its footer.
 export type TurnStats = { tools: number; added: number; removed: number }
@@ -127,6 +140,9 @@ declare module 'claude-code' {
       usage: UsageSnap
       // The usage band's countdowns by limit label, as last drawn.
       countdowns: Record<string, string>
+      // The main loop's last request to the model, and the cache's meter as last drawn.
+      cache: CacheSnap | null
+      warmth: Warmth | null
       isLight: boolean
       images: StateFamily<boolean>
       quiet: StateFamily<boolean>

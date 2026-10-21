@@ -36,6 +36,17 @@ export function formatMs(ms: number): string {
   return ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : formatDuration(ms)
 }
 
+// A token count at a glance: `950`, `8.4k`, `84k`, `1M`.
+export function formatTokens(count: number): string {
+  const scaled = (value: number, unit: string) => `${value < 9.95 ? Number(value.toFixed(1)) : Math.round(value)}${unit}`
+
+  if (count >= 999_500) {
+    return scaled(count / 1_000_000, 'M')
+  }
+
+  return count >= 1000 ? scaled(count / 1000, 'k') : String(Math.round(count))
+}
+
 // Lines added and removed, read from an Edit or Write record's patch.
 export function diffstat(output: unknown): { added: number; removed: number } | null {
   const patch = (output as { structuredPatch?: unknown } | null)?.structuredPatch

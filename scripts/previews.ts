@@ -121,7 +121,7 @@ for (const [theme, palette] of [
   write(`spinners-${theme}`, spinners(palette))
   write(`terminal-${theme}`, terminalSvg({ stdout: ' Test Files  12 passed (12)\n      Tests  148 passed (148)\n   Duration  3.41s', stderr: '', interrupted: false }, false, palette, WIDTH))
   write(`code-${theme}`, codeSvg(['// Rate limit per route, keyed by user', 'export function limit(route: string, perMinute = 60) {', '  const used = new Map<string, number>()', '  return (user: string) => (used.get(user) ?? 0) < perMinute', '}'].join('\n'), 'ts', palette, WIDTH))
-  write(`usage-${theme}`, usageSvg([{ label: 'context', percent: 42 }, { label: '5h', percent: 18 }, { label: '7d', percent: 61 }], palette).source)
+  write(`usage-${theme}`, usageSvg([{ label: 'cache', percent: 87, warm: true, resets: '52m' }, { label: 'context', percent: 42, tokens: '84k/200k' }, { label: 'Session', percent: 18 }, { label: 'Week', percent: 61 }], palette).source)
 }
 
 const page = (background: string, theme: string) =>
