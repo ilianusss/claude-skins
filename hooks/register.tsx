@@ -66,6 +66,8 @@ const frameAtom = atom({ plugin: 'skins', key: 'frame' } as const, 0)
 const turnsAtom = atom({ plugin: 'skins', key: 'turns' } as const, {})
 const durationAtom = atom({ plugin: 'skins', key: 'duration' } as const, -1)
 const editingAtom = atom({ plugin: 'skins', key: 'editing' } as const, 'user' as SkinSlot)
+// Whether the settings pane shows the skins past the shortlist; each /skin opens it closed.
+const moreAtom = atom({ plugin: 'skins', key: 'moreSkins' } as const, false)
 const lightAtom = atom({ plugin: 'skins', key: 'isLight' } as const, false)
 const imagesAtom = atom({ plugin: 'skins', key: 'images' } as const, false)
 // Whether a call only looked, so quiet output folds its result away.
@@ -827,6 +829,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'skin' }, async ($, e) => {
     if (e.args.trim() === '') {
+      await update($, moreAtom, () => false)
       await $.ui.open({ id: SETTINGS, title: 'Skins', focus: true, closeOnEscape: true })
 
       return {}
@@ -893,6 +896,7 @@ export const register: Register = on => {
     const prefs = await read($, prefsAtom)
     const custom = await read($, customAtom)
     const editing = await read($, editingAtom)
+    const more = await read($, moreAtom)
     const skin = resolveSkin(prefs.skin, custom) ?? resolveSkin(DEFAULT_PREFS.skin, custom)
     const ui = $.ui.resolve(e)
 
@@ -903,8 +907,9 @@ export const register: Register = on => {
     const look = lookOf(ui, { prefs, custom, skin }, e.surface)
     const state = { prefs, custom }
 
-    return settingsPane(look, ui, { names: skinNames(custom), editing, width: e.props.bodyColumns }, {
+    return settingsPane(look, ui, { names: skinNames(custom), more, editing, width: e.props.bodyColumns }, {
       pick: name => void commit($, { ...state, prefs: { ...prefs, skin: name } }),
+      more: () => void update($, moreAtom, open => !open),
       toggle: word => void commit($, { ...state, prefs: { ...prefs, [TOGGLES[word]]: !prefs[TOGGLES[word]] } }),
       calm: () => void commit($, { ...state, prefs: withCalm(prefs, prefs.calm === null) }),
       tables: () => void commit($, { ...state, prefs: { ...prefs, tables: nextTables(prefs.tables) } }),

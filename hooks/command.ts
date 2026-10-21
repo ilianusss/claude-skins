@@ -26,6 +26,7 @@ export const DEFAULT_PREFS: Prefs = {
   expand: false,
   compact: true,
   calm: null,
+  shortlist: [],
 }
 
 // The on/off settings, by the word /skin and the settings pane use for each. Tables have a
@@ -87,6 +88,23 @@ function calmOf(value: unknown): CalmSnapshot | null {
     : null
 }
 
+// A stored shortlist keeps the skins that still exist, each once, in its order.
+function shortlistOf(value: unknown, names: readonly string[]): string[] {
+  return Array.isArray(value) ? [...new Set(value.filter((name): name is string => typeof name === 'string' && names.includes(name)))] : []
+}
+
+// The settings pane's skins: the shortlist alone, or with `more` open the shortlist and then
+// every other skin, so the shortlist keeps its hotkeys either way.
+export function offered(names: readonly string[], shortlist: readonly string[], more: boolean): string[] {
+  const listed = shortlist.filter(name => names.includes(name))
+
+  if (listed.length === 0) {
+    return [...names]
+  }
+
+  return more ? [...listed, ...names.filter(name => !listed.includes(name))] : listed
+}
+
 // What the store hands back may be old, hand-edited or from another version.
 export function parsePrefs(raw: unknown, names: readonly string[]): Prefs {
   const saved = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
@@ -120,6 +138,7 @@ export function parsePrefs(raw: unknown, names: readonly string[]): Prefs {
     expand: flagOr(saved.expand, DEFAULT_PREFS.expand),
     compact: flagOr(saved.compact, DEFAULT_PREFS.compact),
     calm: calmOf(saved.calm),
+    shortlist: shortlistOf(saved.shortlist, names),
   }
 }
 
@@ -193,6 +212,7 @@ export function listing(current: Prefs, names: readonly string[], extra: readonl
         ['expand', onOff(current.expand)],
         ['compact', onOff(current.compact)],
         ['calm', onOff(current.calm !== null)],
+        ['shortlist', current.shortlist.length === 0 ? 'off' : current.shortlist.join(' ')],
         ...extra,
       ],
     ),
@@ -221,6 +241,7 @@ export const helpText = (): string =>
         ['`/skin calm [on/off]`', 'no motion, one line per tool row, read-only output folded'],
         ['`/skin copy` · `copy code`', 'copy the last reply, or its last code block'],
         ['`/skin pin` · `unpin` · `share`', 'give this folder its own look, drop it, or make it the default'],
+        ['`/skin shortlist <names>` · `off`', 'the skins the settings offer first, the rest behind more'],
         ['`/skin tables on/text/off`', 'tables as cards, as selectable text, or Claude Code\'s own'],
         ['`/skin prompt left/right/plain`', 'which side your prompt\'s outline sits on, or a plain marker'],
         ['`/skin words claude/skin`', 'whose words the spinner and the turn footer show'],
@@ -255,7 +276,7 @@ const isToggle = (word: string): word is ToggleWord => Object.hasOwn(TOGGLES, wo
 
 // Every argument but none: with none, /skin opens the settings pane instead.
 export function runSkinCommand(args: string, current: Prefs, names: readonly string[]): Outcome {
-  const [head = '', value] = args.trim().toLowerCase().split(/\s+/)
+  const [head = '', value, ...rest] = args.trim().toLowerCase().split(/\s+/)
 
   if (isToggle(head)) {
     const field = TOGGLES[head]
@@ -301,6 +322,22 @@ export function runSkinCommand(args: string, current: Prefs, names: readonly str
       return value === 'unicode' || value === 'ascii'
         ? changed({ ...current, icons: value }, `icons: ${value}`)
         : refused(current, 'usage: /skin icons unicode|ascii')
+    case 'shortlist': {
+      if (value === undefined) {
+        return refused(current, 'usage: /skin shortlist <skin> [<skin> …] | off')
+      }
+
+      if (value === 'off') {
+        return changed({ ...current, shortlist: [] }, 'shortlist off: the settings offer every skin')
+      }
+
+      const wanted = [...new Set([value, ...rest])]
+      const unknown = wanted.filter(name => !names.includes(name))
+
+      return unknown.length === 0
+        ? changed({ ...current, shortlist: wanted }, `shortlist: ${wanted.join(' ')}`)
+        : refused(current, `unknown skin "${unknown[0]}". /skin list shows them`)
+    }
     default:
       return names.includes(head)
         ? changed({ ...current, skin: head }, `skin: ${head}`)

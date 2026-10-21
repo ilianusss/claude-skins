@@ -61,6 +61,9 @@ export type Prefs = {
   // While /skin calm is on, the parts it changed as they were before it, for calm off to
   // put back; null while it is off.
   calm: CalmSnapshot | null
+  // The skins the settings pane offers first, in order, with the rest behind `more`; empty
+  // offers every skin.
+  shortlist: string[]
 }
 
 // The prefs /skin calm changes: no shimmer, no rail line above each tool row, quiet output.
@@ -119,6 +122,8 @@ declare module 'claude-code' {
       turns: Record<string, TurnStats>
       duration: StateFamily<number>
       editing: SkinSlot
+      // Whether the settings pane shows the skins past the shortlist.
+      moreSkins: boolean
       usage: UsageSnap
       // The usage band's countdowns by limit label, as last drawn.
       countdowns: Record<string, string>

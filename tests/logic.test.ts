@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULT_PREFS, parsePrefs, runSkinCommand, TOGGLES, withCalm } from '../hooks/command'
+import { DEFAULT_PREFS, offered, parsePrefs, runSkinCommand, TOGGLES, withCalm } from '../hooks/command'
 import { foldLines, shellResultOf, shellStatus } from '../hooks/shell'
 import { buildCustom, resolveSkin, skinNames, withSlot } from '../hooks/custom'
 import { runDesign } from '../hooks/designer'
@@ -201,6 +201,22 @@ test('stored prefs that are stale or hand-edited fall back to defaults', async (
   expect(parsePrefs(undefined, NAMES)).toEqual(DEFAULT_PREFS)
   expect(parsePrefs({ skin: 'gone', icons: 'x', rail: 'yes' }, NAMES)).toEqual(DEFAULT_PREFS)
   expect(parsePrefs({ skin: 'off', rail: false }, NAMES).rail).toBe(false)
+})
+
+test('a shortlist puts its skins first in the settings, the rest behind more', async () => {
+  const set = runSkinCommand('shortlist nord tokyo-night nord', DEFAULT_PREFS, NAMES)
+  expect(set.prefs.shortlist).toEqual(['nord', 'tokyo-night'])
+  expect(set.channel).toBe('toast')
+  expect(runSkinCommand('shortlist nord plaid', DEFAULT_PREFS, NAMES).prefs).toBe(DEFAULT_PREFS)
+  expect(runSkinCommand('shortlist', DEFAULT_PREFS, NAMES).channel).toBe('row')
+  expect(runSkinCommand('shortlist off', set.prefs, NAMES).prefs.shortlist).toEqual([])
+  expect(runSkinCommand('list', set.prefs, NAMES).message).toMatch(/\| shortlist +\| nord tokyo-night +\|/)
+  expect(parsePrefs({ shortlist: ['nord', 'gone', 3, 'nord'] }, NAMES).shortlist).toEqual(['nord'])
+  expect(parsePrefs({ shortlist: 'nord' }, NAMES).shortlist).toEqual([])
+  expect(offered(NAMES, [], false)).toEqual(NAMES)
+  expect(offered(NAMES, ['nord'], false)).toEqual(['nord'])
+  expect(offered(NAMES, ['nord'], true)).toEqual(['nord', 'tokyo-night', 'dracula'])
+  expect(offered(NAMES, ['gone'], false)).toEqual(NAMES)
 })
 
 test('tables are on, text or off, and a stored on/off from before still reads', async () => {

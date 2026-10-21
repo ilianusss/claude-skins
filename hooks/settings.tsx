@@ -1,6 +1,7 @@
 import type { ElementTable } from 'claude-code'
 
 import type { SkinSlot } from '../types'
+import { offered } from './command'
 import type { ToggleWord } from './command'
 import { SLOTS } from './custom'
 import type { Table } from './markdown'
@@ -11,12 +12,15 @@ export type PaneUi = Pick<ElementTable<'terminal' | 'desktop'>, 'Box' | 'Text' |
 
 export type SettingsModel = {
   names: readonly string[]
+  // Whether the skins past the shortlist show.
+  more: boolean
   editing: SkinSlot
   width: number
 }
 
 export type SettingsActions = {
   pick: (name: string) => void
+  more: () => void
   toggle: (word: ToggleWord) => void
   calm: () => void
   tables: () => void
@@ -81,12 +85,15 @@ export function settingsPane(look: Look, ui: PaneUi, model: SettingsModel, actio
       onPress={() => actions.toggle(word)}
     />
   )
+  const skins = offered(model.names, prefs.shortlist, model.more)
+  // With a shortlist, `more` opens the rest and `less` closes them; without one every skin shows.
+  const folds = offered(model.names, prefs.shortlist, false).length < model.names.length
 
   return (
     <Box flexDirection="column" rowGap={1}>
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
         <Text color={palette.muted}>Skin</Text>
-        {model.names.map((name, i) => (
+        {skins.map((name, i) => (
           <Button
             key={`skin-${name}`}
             label={name === prefs.skin ? `${name} ●` : name}
@@ -96,6 +103,17 @@ export function settingsPane(look: Look, ui: PaneUi, model: SettingsModel, actio
             {...(i < 9 ? { hotkey: String(i + 1) } : {})}
           />
         ))}
+        {folds
+          ? [
+              <Button
+                key="skin-more"
+                label={model.more ? 'less' : `more (${model.names.length - skins.length})`}
+                plain
+                onPress={() => actions.more()}
+                {...(skins.length < 9 ? { hotkey: String(skins.length + 1) } : {})}
+              />,
+            ]
+          : []}
       </Box>
 
       {preview(look, model.width)}
