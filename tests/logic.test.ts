@@ -12,7 +12,7 @@ import { diffLines, diffSvg, hunksOf } from '../hooks/svg-diff'
 import { fitColumns, kindOfCell, measure, tableSvg, wrapCell } from '../hooks/svg-table'
 import { outputLines, shellOutputOf, terminalSvg } from '../hooks/svg-terminal'
 import { countdownOf, countdownsOf, limitLabel, meterColor, metersKey, metersOf, usageSvg } from '../hooks/svg-usage'
-import { isNewer, starStep, updateNotice } from '../hooks/updates'
+import { starStep } from '../hooks/star'
 import { deepen, gnomeDark, isLightTheme, macDark, resolveLight, toLight, windowsDark } from '../hooks/light'
 import { parseFolders, prefsFor, withFolder, withoutFolder } from '../hooks/folders'
 import { kindOf, summarize, toolLabel } from '../hooks/tools'
@@ -1144,17 +1144,6 @@ test('splitReply can leave tables and turned-down fences as text', async () => {
 
   expect(segments.map(segment => segment.kind)).toEqual(['text', 'code'])
   expect(segments[0]?.kind === 'text' && segments[0].text).toContain('```ts')
-})
-
-test('a release is newer by its first differing part, and anything not x.y.z never is', () => {
-  expect(isNewer('0.1.3', '0.1.2')).toBe(true)
-  expect(isNewer('0.2.0', '0.1.9')).toBe(true)
-  expect(isNewer('0.1.10', '0.1.9')).toBe(true)
-  expect(isNewer('0.1.2', '0.1.2')).toBe(false)
-  expect(isNewer('0.1.2', '0.1.3')).toBe(false)
-  expect(isNewer('1.0.0-beta', '0.1.2')).toBe(false)
-  expect(isNewer('0.1.3', 'dev')).toBe(false)
-  expect(updateNotice('0.1.3', '0.1.2')).toBe('skins 0.1.3 is out (you have 0.1.2). Run: claude plugin update skins@hellosverre-mods, then restart')
 })
 
 test('the star ask comes once, three days after skins was first seen', () => {

@@ -33,7 +33,7 @@ Looking for more mods? `/plugin install mod-store@hellosverre-mods`, then `/mods
 
 ## Update
 
-skins checks for a new release once a day and shows a toast when you are behind. To update:
+skins does not check for new releases. To update:
 
 ```bash
 claude plugin marketplace update hellosverre-mods
@@ -261,8 +261,7 @@ back to a code card. What skins plans next is in [ROADMAP.md](ROADMAP.md).
 
 skins draws and remembers, nothing else. It reads the session directory, your context and plan
 usage, the theme setting and `SKINS_THEME` / `COLORFGBG`, and keeps its settings in the mod store.
-Its one network call is the daily version check: a GET of this repo's
-[`plugin.json`](.claude-plugin/plugin.json) on `raw.githubusercontent.com`, sending nothing. On `auto`
+It makes no network calls. On `auto`
 it asks the OS for light or dark mode (`defaults` on macOS, `gsettings` on GNOME). It compacts or
 copies only when you press the button. Check it yourself with `claude plugin validate .`.
 

@@ -1455,30 +1455,16 @@ test('/skin copy copies the last reply and says so, or says there is nothing yet
   expect(copied).toEqual([reply, 'pnpm build'])
 })
 
-// The update check runs unawaited off session.start; a macrotask lets it finish.
+// The star ask runs unawaited off session.start; a macrotask lets it finish.
 const unawaited = () =>
   new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (run: () => void, ms: number) => void }).setTimeout(resolve, 0))
 
-test('a session start says when a newer release is out, at most once a day', async ($, on) => {
-  const store: Record<string, unknown> = {}
-  const toasts: string[] = []
-  let latest = '0.1.3'
+test('a session start never reaches the network', async ($, on) => {
   let fetches = 0
   stubEngine(on, { store: true, toast: true })
-  on('store.get', ($, e) => ({ value: store[e.key] }))
-  on('store.set', ($, e) => {
-    store[e.key] = e.value
-    return { value: undefined }
-  })
-  on('ui.toast', ($, e) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
-  // The engine hands the path back in the platform's own separators.
-  on('fs.read', ($, e) => ({ value: /\.claude-plugin[\\/]plugin\.json$/.test(e.path) ? '{ "version": "0.1.2" }' : '' }))
   on('http.fetch', () => {
     fetches += 1
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ version: latest }) } as never }
+    return { value: { status: 200, ok: true, headers: {}, text: '{}' } as never }
   })
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: { command: 'skin' } }))
@@ -1487,13 +1473,7 @@ test('a session start says when a newer release is out, at most once a day', asy
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await unawaited()
-  expect(toasts.filter(text => text.startsWith('skins 0.1.3 is out'))).toHaveLength(1)
-
-  latest = '0.1.4'
-  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  await unawaited()
-  expect(fetches).toBe(1)
-  expect(toasts.some(text => text.includes('0.1.4'))).toBe(false)
+  expect(fetches).toBe(0)
 })
 
 test('a session start waits for the design tool to be listed, so the first turn lists it', async ($, on) => {

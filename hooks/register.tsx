@@ -30,9 +30,9 @@ import { shortenPath } from './format'
 import { kindOf, summarize, toolLabel } from './tools'
 import { commandOf, errorLine, isQuiet, quietLabel } from './quiet'
 import { MAX_MARKDOWN, replySegments } from './reply'
-import { isDue, isNewer, LATEST_URL, STAR_NOTICE, starStep, updateNotice, versionOf } from './updates'
+import { STAR_NOTICE, starStep } from './star'
 import { hyperlinksFrom, touchOf } from './links'
-import type { Checked, Star } from './updates'
+import type { Star } from './star'
 
 const SETTINGS = 'skins-settings'
 const GALLERY = 'skins-gallery'
@@ -540,34 +540,6 @@ async function tickCountdowns($: EngineInterface): Promise<void> {
   await update($, countdownsAtom, () => next)
 }
 
-// True when it showed the update notice, so the star ask can keep out of its way.
-async function checkForUpdate($: EngineInterface): Promise<boolean> {
-  const now = await $.clock.now()
-
-  if (!isDue(await $.store.get('updateCheck'), now)) {
-    return false
-  }
-
-  // Stamped before the fetch, so an offline machine is not asked again every session.
-  await $.store.set('updateCheck', { at: now } satisfies Checked)
-
-  const current = versionOf(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))
-  const response = await $.http.fetch(LATEST_URL)
-
-  if (!response.ok) {
-    throw new Error(`update check: ${LATEST_URL} answered ${response.status}`)
-  }
-
-  const latest = versionOf(response.text)
-
-  if (current !== undefined && latest !== undefined && isNewer(latest, current)) {
-    $.ui.toast(updateNotice(latest, current), { timeoutMs: 12_000 })
-    return true
-  }
-
-  return false
-}
-
 async function askForStar($: EngineInterface): Promise<void> {
   const step = starStep(await $.store.get('star'), await $.clock.now())
 
@@ -662,16 +634,8 @@ export const register: Register = on => {
     await refreshUsage($)
     await followTheme($)
 
-    // Off the start's path: a slow or offline network must not hold the session up.
-    // The star ask waits a session when the update notice is showing; one toast at a time.
-    const logDebug = (error: unknown) => $.ui.log(error instanceof Error ? error.message : String(error), { to: 'debug' })
-    void checkForUpdate($)
-      .catch((error: unknown) => {
-        logDebug(error)
-        return false
-      })
-      .then(told => (told ? undefined : askForStar($)))
-      .catch(logDebug)
+    // Off the start's path, so the store write cannot hold the session up.
+    void askForStar($).catch((error: unknown) => $.ui.log(error instanceof Error ? error.message : String(error), { to: 'debug' }))
 
     // Only the spinner reads the frame, so a tick redraws the spinner and nothing else.
     ticker?.cancel()
