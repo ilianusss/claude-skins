@@ -1025,7 +1025,8 @@ export function compactRow(look: Look, meters: readonly Meter[], compact: () => 
 // compactSection); `/skin compact off` drops them. Given its `width`, the band takes it whole
 // and packs its sections into lines itself, so a line never starts or ends on a separator;
 // without, it is one row that wraps where it must. `gutter` columns stay clear past the bar's
-// right end, for a collapse mark the engine draws there (see markGutter).
+// right end, for a collapse mark the engine draws there (see markGutter). A blank row sits
+// between lines, packed or wrapped, so they do not run together.
 export function usageBand(
   look: Look,
   meters: readonly Meter[],
@@ -1040,7 +1041,7 @@ export function usageBand(
   // The border and the padding inside it take four columns.
   const lines = layout.width === undefined ? [sections.map((_, i) => i)] : packLines(sections.map(section => section.width), layout.width - 4)
   const row = (line: readonly number[]) => (
-    <Box flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="center" columnGap={2}>
+    <Box flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="center" columnGap={2} rowGap={1}>
       {line.flatMap((index, i) => [...(i === 0 ? [] : [<Text color={palette.muted}>│</Text>]), sections[index]?.view])}
     </Box>
   )
@@ -1051,6 +1052,7 @@ export function usageBand(
       borderStyle="round"
       borderColor={palette.muted}
       paddingX={1}
+      rowGap={1}
       marginRight={gutter}
       {...(layout.width === undefined ? {} : { width: layout.width })}
     >

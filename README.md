@@ -91,7 +91,7 @@ Built-in skins: `noir`, `tokyo-night`, `dracula`, `catppuccin`, `rose-pine`, `no
 | `rail` | The coloured rail beside tool rows |
 | `shimmer` | The band of light across the spinner word |
 | `band` | The usage meters: how warm the prompt cache is, context with its tokens, plan limits. Above the prompt on the desktop, the footer under it in the terminal |
-| `countdown` | Time left on each limit in the band: `Session (reset in 4h12m)`, `Week (3d04h12m)` |
+| `countdown` | Time left on each limit in the band (on by default): `Session (reset in 4h12m)`, `Week (3d04h12m)` |
 | `compact` | The Compact button in the band, with a nudge from 70% context (on by default). In the terminal they show above the prompt from 70%, where the `0` key presses it |
 | `clip` | Trim Claude Code's own shell output to its head and tail |
 | `markdown` | Alerts and task lists drawn |

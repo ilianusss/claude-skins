@@ -1656,22 +1656,23 @@ test('the band holds its rings still while the numbers stay and fills them once 
 // The stub clock starts at 10 s; this session window resets 100 minutes after that.
 const resetting = { startedAt: 0, context: { window: 200000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 18, resetsAt: new Date(10_000 + 100 * 60_000).toISOString() }] }
 
-test('with countdown on, the band says when each limit resets, on both surfaces', async ($, on) => {
+test('the band says when each limit resets by default, and /skin countdown off takes it away, on both surfaces', async ($, on) => {
   on('session.usage', () => ({ value: resetting }))
   stubEngine(on, { usage: true })
   await startDesktop($, on)
 
-  const desktop = await $.ui.mount(BAND('desktop', false))
-  expect(await svgSource(desktop), 'off by default').not.toContain('1h40m')
-  await desktop.unmount()
-
-  await runSkin($, 'countdown on')
   const band = await $.ui.mount(BAND('desktop', false))
-  expect(await svgSource(band)).toContain('Session (reset in 1h40m)')
+  expect(await svgSource(band), 'on by default').toContain('Session (reset in 1h40m)')
   expect(((await band.findAll({ type: 'Svg' })) as unknown as { props: { alt: string } }[]).map(el => el.props.alt).join(', ')).toContain('Session 18%, resets in 1h40m')
+  await band.unmount()
 
   const line = await $.ui.mount(FOOTER())
   expect(await line.find({ type: 'Text', text: '  18% Session (reset in 1h40m)' })).toBeDefined()
+  await line.unmount()
+
+  await runSkin($, 'countdown off')
+  const bare = await $.ui.mount(BAND('desktop', false))
+  expect(await svgSource(bare)).not.toContain('1h40m')
 })
 
 test('the context meter shows the tokens behind its percent, on both surfaces', async ($, on) => {
